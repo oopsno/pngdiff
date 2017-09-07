@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD 14)
 find_package(PNG REQUIRED)
 include_directories(include ${PNG_INCLUDE_DIRS})
 
-set(SOURCE_FILES main.cpp src/pndiff.cpp)
-add_executable(pngdiff ${SOURCE_FILES})
-target_link_libraries(pngdiff ${PNG_LIBRARIES})
+file(GLOB PNGDIFF_SOURCES src/*.cpp)
+add_library(png-diff ${PNGDIFF_SOURCES})
+target_link_libraries(png-diff ${PNG_LIBRARIES})
+
+add_executable(pngdiff main.cpp)
+target_link_libraries(pngdiff png-diff)
