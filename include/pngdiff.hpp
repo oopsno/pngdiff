@@ -2,8 +2,13 @@
 
 #include <cstdint>
 #include <png.h>
+#include <stdexcept>
 
 namespace pngdiff {
+
+struct LibPNGError: std::runtime_error {
+  explicit LibPNGError(const std::string& what) : std::runtime_error(what) {}
+};
 
 struct IHDR {
   #define IHDR_U32_FIELDS width, height
@@ -44,6 +49,6 @@ struct PNG {
   void show() const;
 };
 
-PNG read_png_file(const char *);
+PNG read_png_file(const char *) throw(std::runtime_error, LibPNGError);
 
 }

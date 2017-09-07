@@ -118,44 +118,106 @@ void abort(const char *s, const char *p) {
   abort(p);
 }
 
-PNG read_png_file(const char *file_name) {
+namespace png {
+
+template<typename Function>
+struct function_wrapper;
+
+template<typename T>
+struct handler {
+  template<typename Fn, typename ...Args>
+  static std::enable_if_t<std::is_integral<T>::value, T>
+  call(Fn fn, const std::string& name, Args ...args) {
+    auto rtv = fn(args...);
+    if (rtv != 0) {
+      throw LibPNGError(name + " returned nullptr");
+    }
+    return rtv;
+  }
+};
+
+template<>
+struct handler<void> {
+  static inline void set_long_jump(const std::string &name, png_structp png_ptr) {
+    if (setjmp(png_jmpbuf(png_ptr)) != 0) {
+      throw LibPNGError(name + " triggered long jump");
+    }
+  }
+  template <typename T>
+  static inline std::enable_if_t<not std::is_same<T, png_structp>::value>
+  set_long_jump(const std::string &name, png_structp png_ptr) { }
+
+  template<typename Fn, typename FirstArg, typename ...Args>
+  static auto call(Fn fn, const std::string& name, FirstArg firstArg, Args ...args) {
+    set_long_jump(name, firstArg);
+    return fn(firstArg, args...);
+  }
+};
+
+template<typename T>
+struct handler<T *> {
+  template<typename Fn, typename ...Args>
+  static auto call(Fn fn, const std::string& name, Args ...args) {
+    auto rtv = fn(args...);
+    if (rtv == nullptr) {
+      throw LibPNGError(name + " returned nullptr");
+    }
+    return rtv;
+  }
+};
+
+template<typename ReturnType, typename ...Args>
+struct function_wrapper<ReturnType(Args...)> {
+  using function_t = std::function<ReturnType(Args...)>;
+  function_t fn;
+  const std::string name;
+
+  explicit function_wrapper(std::string name, function_t fn) : name{std::move(name)}, fn{fn} {}
+
+  inline ReturnType operator()(Args ...args) const {
+    return handler<ReturnType>::call(fn, name, args...);
+  }
+};
+
+#define WRAP(fn) static auto fn = function_wrapper<decltype(png_##fn)>("png_"#fn, png_##fn)
+
+WRAP(sig_cmp);
+WRAP(create_read_struct);
+WRAP(create_info_struct);
+WRAP(init_io);
+WRAP(set_sig_bytes);
+WRAP(read_image);
+WRAP(read_info);
+WRAP(read_update_info);
+WRAP(read_end);
+WRAP(get_PLTE);
+
+#undef WRAP
+
+} // namespace png
+
+PNG read_png_file(const char *file_name) throw(std::runtime_error, LibPNGError) {
   /* open file and test for it being a png */
   PNG png;
   png_byte header[8];  // 8 is the maximum size that can be checked
   auto *fp = fopen(file_name, "rb");
   if (fp == nullptr) {
-    abort("[read_png_file] File %s could not be opened for reading", file_name);
+    throw std::runtime_error(std::string("File could not be opened for reading: ") + file_name);
   }
   fread(header, 1, 8, fp);
-  if (png_sig_cmp(header, 0, 8) != 0) {
-    abort("[read_png_file] File %s is not recognized as a PNG file", file_name);
-  }
+  png::sig_cmp(header, 0, 8);
 
   /* initialize stuff */
-  png.internel.ptr = png_create_read_struct("1.6.32", nullptr, nullptr, nullptr);
-  if (png.internel.ptr == nullptr) {
-    abort("[read_png_file] png_create_read_struct failed");
-  }
+  png.internel.ptr = png::create_read_struct("1.6.32", nullptr, nullptr, nullptr);
+  png.internel.info = png::create_info_struct(png.internel.ptr);
+  png.internel.info_end = png::create_info_struct(png.internel.ptr);
 
-  png.internel.info = png_create_info_struct(png.internel.ptr);
-  if (png.internel.info == nullptr) {
-    abort("[read_png_file] png_create_info_struct failed");
-  }
-
-  if (setjmp(png_jmpbuf(png.internel.ptr)) != 0) {
-    abort("[read_png_file] Error during init_io");
-  }
-
-  png_init_io(png.internel.ptr, fp);
-  png_set_sig_bytes(png.internel.ptr, 8);
-  png_read_info(png.internel.ptr, png.internel.info);
-  png_read_update_info(png.internel.ptr, png.internel.info);
+  png::init_io(png.internel.ptr, fp);
+  png::set_sig_bytes(png.internel.ptr, 8);
+  png::read_info(png.internel.ptr, png.internel.info);
+  png::read_update_info(png.internel.ptr, png.internel.info);
 
   /* read file */
-  if (setjmp(png_jmpbuf(png.internel.ptr)) != 0) {
-    abort("[read_png_file] Error during read_image");
-  }
-
   const auto height = png_get_image_height(png.internel.ptr, png.internel.info);
   png.internel.rowbytes = png_get_rowbytes(png.internel.ptr, png.internel.info);
   png.pixels = new png_bytep[height];
@@ -163,13 +225,8 @@ PNG read_png_file(const char *file_name) {
     png.pixels[y] = new png_byte[png.internel.rowbytes];
   }
 
-  png_read_image(png.internel.ptr, png.pixels);
-
-  png.internel.info_end = png_create_info_struct(png.internel.ptr);
-  if (png.internel.info_end == nullptr) {
-    abort("[read_png_file] png_create_info_struct failed");
-  }
-  png_read_end(png.internel.ptr, png.internel.info_end);
+  png::read_image(png.internel.ptr, png.pixels);
+  png::read_end(png.internel.ptr, png.internel.info_end);
 
   png.ihdr.width = png_get_image_width(png.internel.ptr, png.internel.info);
   png.ihdr.height = png_get_image_height(png.internel.ptr, png.internel.info);
@@ -180,10 +237,7 @@ PNG read_png_file(const char *file_name) {
   png.ihdr.compression_method = png_get_compression_type(png.internel.ptr, png.internel.info);
 
   if (png.ihdr.color_type == PNG_COLOR_TYPE_PALETTE) {
-    auto success = png_get_PLTE(png.internel.ptr, png.internel.info, &png.plte.colors, &png.plte.num);
-    if (success == 0) {
-      abort("png_get_PLTE", file_name);
-    }
+    png::get_PLTE(png.internel.ptr, png.internel.info, &png.plte.colors, &png.plte.num);
   }
 
   fclose(fp);
@@ -200,4 +254,4 @@ PNG::~PNG() {
   }
 }
 
-}
+} // namespace pngdiff
