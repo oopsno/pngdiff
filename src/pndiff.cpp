@@ -1,4 +1,6 @@
 #include <iostream>
+#include <sstream>
+#include <iomanip>
 
 #include "mmpl.hpp"
 #include "pngdiff.hpp"
@@ -41,9 +43,10 @@ static bool is_same_color(const png_color& lhs, const png_color& rhs) {
 }
 
 static std::string to_string(const png_color& color) {
-  static char buffer[2048];
-  std::snprintf(buffer, 2048, "#%02X%02X%02X", color.red, color.blue, color.green);
-  return buffer;
+  std::stringstream ss;
+  ss << "0x" << std::hex << std::uppercase << std::setfill('0') << std::setw(2);
+  ss << int(color.red) << int(color.green) << int(color.blue);
+  return ss.str();
 }
 
 bool PLTE::operator==(const PLTE& other) const {
